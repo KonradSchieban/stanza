@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/observiq/stanza/errors"
 	"go.uber.org/zap"
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/transform"
+
+	"github.com/observiq/stanza/errors"
+	"github.com/observiq/stanza/operator/helper"
 )
 
 const fingerPrintSize = 1000 // bytes
@@ -27,8 +27,7 @@ type Reader struct {
 	fileInput  *InputOperator
 	file       *os.File
 
-	decoder      *encoding.Decoder
-	decodeBuffer []byte
+	decoder *helper.Decoder
 
 	*zap.SugaredLogger `json:"-"`
 }
@@ -41,8 +40,7 @@ func NewReader(path string, f *InputOperator, file *os.File, fp *Fingerprint) (*
 		Path:          path,
 		fileInput:     f,
 		SugaredLogger: f.SugaredLogger.With("path", path),
-		decoder:       f.encoding.NewDecoder(),
-		decodeBuffer:  make([]byte, 1<<12),
+		decoder:       f.decoder.Copy(),
 	}
 	return r, nil
 }
@@ -113,7 +111,7 @@ func (f *Reader) emit(ctx context.Context, msgBuf []byte) error {
 		return nil
 	}
 
-	msg, err := f.decode(msgBuf)
+	msg, err := f.decoder.Decode(msgBuf)
 	if err != nil {
 		return fmt.Errorf("decode: %s", err)
 	}
@@ -131,21 +129,6 @@ func (f *Reader) emit(ctx context.Context, msgBuf []byte) error {
 	}
 	f.fileInput.Write(ctx, e)
 	return nil
-}
-
-// decode converts the bytes in msgBuf to utf-8 from the configured encoding
-func (f *Reader) decode(msgBuf []byte) (string, error) {
-	for {
-		f.decoder.Reset()
-		nDst, _, err := f.decoder.Transform(f.decodeBuffer, msgBuf, true)
-		if err != nil && err == transform.ErrShortDst {
-			f.decodeBuffer = make([]byte, len(f.decodeBuffer)*2)
-			continue
-		} else if err != nil {
-			return "", fmt.Errorf("transform encoding: %s", err)
-		}
-		return string(f.decodeBuffer[:nDst]), nil
-	}
 }
 
 func getScannerError(scanner *PositionalScanner) error {

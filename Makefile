@@ -66,7 +66,7 @@ generate:
 
 .PHONY: build
 build:
-	(cd ./cmd/stanza && CGO_ENABLED=0 go build -o ../../artifacts/stanza_$(GOOS)_$(GOARCH)  .)
+	(cd ./cmd/stanza && CGO_ENABLED=0 go build -gcflags=all="-N -l" -o ../../artifacts/stanza_$(GOOS)_$(GOARCH)  .)
 
 .PHONY: install
 install:

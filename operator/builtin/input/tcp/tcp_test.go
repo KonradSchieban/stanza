@@ -14,7 +14,7 @@ import (
 
 func tcpInputTest(input []byte, expected []string) func(t *testing.T) {
 	return func(t *testing.T) {
-		cfg := NewTCPInputConfig("test_id")
+		cfg := NewInputConfig("test_id")
 		cfg.ListenAddress = ":0"
 
 		ops, err := cfg.Build(testutil.NewBuildContext(t))
@@ -22,7 +22,7 @@ func tcpInputTest(input []byte, expected []string) func(t *testing.T) {
 		op := ops[0]
 
 		mockOutput := testutil.Operator{}
-		tcpInput := op.(*TCPInput)
+		tcpInput := op.(*InputOperator)
 		tcpInput.InputOperator.OutputOperators = []operator.Operator{&mockOutput}
 
 		entryChan := make(chan *entry.Entry, 1)
@@ -65,7 +65,7 @@ func TestTcpInput(t *testing.T) {
 }
 
 func BenchmarkTcpInput(b *testing.B) {
-	cfg := NewTCPInputConfig("test_id")
+	cfg := NewInputConfig("test_id")
 	cfg.ListenAddress = ":0"
 
 	ops, err := cfg.Build(testutil.NewBuildContext(b))
@@ -73,7 +73,7 @@ func BenchmarkTcpInput(b *testing.B) {
 	op := ops[0]
 
 	fakeOutput := testutil.NewFakeOutput(b)
-	tcpInput := op.(*TCPInput)
+	tcpInput := op.(*InputOperator)
 	tcpInput.InputOperator.OutputOperators = []operator.Operator{fakeOutput}
 
 	err = tcpInput.Start()

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/observiq/stanza/entry"
 	"github.com/observiq/stanza/operator/helper"
-	"go.uber.org/zap"
-	"golang.org/x/text/encoding"
 )
 
 // InputOperator is an operator that monitors files for entries
@@ -40,7 +40,7 @@ type InputOperator struct {
 
 	fingerprintBytes int64
 
-	encoding encoding.Encoding
+	decoder *helper.Decoder
 
 	wg         sync.WaitGroup
 	readerWg   sync.WaitGroup

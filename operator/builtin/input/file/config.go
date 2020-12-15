@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
+
+	"golang.org/x/text/encoding"
 
 	"github.com/observiq/stanza/entry"
 	"github.com/observiq/stanza/operator"
 	"github.com/observiq/stanza/operator/helper"
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/encoding/ianaindex"
-	"golang.org/x/text/encoding/unicode"
 )
 
 func init() {
@@ -29,19 +27,20 @@ const (
 func NewInputConfig(operatorID string) *InputConfig {
 	return &InputConfig{
 		InputConfig:        helper.NewInputConfig(operatorID, "file_input"),
+		DecoderConfig:      helper.NewDecoderConfig("nop"),
 		PollInterval:       helper.Duration{Duration: 200 * time.Millisecond},
 		IncludeFileName:    true,
 		IncludeFilePath:    false,
 		StartAt:            "end",
 		MaxLogSize:         defaultMaxLogSize,
 		MaxConcurrentFiles: defaultMaxConcurrentFiles,
-		Encoding:           "nop",
 	}
 }
 
 // InputConfig is the configuration of a file input operator
 type InputConfig struct {
-	helper.InputConfig `yaml:",inline"`
+	helper.InputConfig   `yaml:",inline"`
+	helper.DecoderConfig `yaml:",inline,omitempty"`
 
 	Include []string `json:"include,omitempty" yaml:"include,omitempty"`
 	Exclude []string `json:"exclude,omitempty" yaml:"exclude,omitempty"`
@@ -51,9 +50,8 @@ type InputConfig struct {
 	IncludeFileName    bool             `json:"include_file_name,omitempty"    yaml:"include_file_name,omitempty"`
 	IncludeFilePath    bool             `json:"include_file_path,omitempty"    yaml:"include_file_path,omitempty"`
 	StartAt            string           `json:"start_at,omitempty"             yaml:"start_at,omitempty"`
-	MaxLogSize         helper.ByteSize  `json:"max_log_size,omitempty"      yaml:"max_log_size,omitempty"`
+	MaxLogSize         helper.ByteSize  `json:"max_log_size,omitempty"         yaml:"max_log_size,omitempty"`
 	MaxConcurrentFiles int              `json:"max_concurrent_files,omitempty" yaml:"max_concurrent_files,omitempty"`
-	Encoding           string           `json:"encoding,omitempty"             yaml:"encoding,omitempty"`
 }
 
 // MultilineConfig is the configuration a multiline operation
@@ -97,12 +95,12 @@ func (c InputConfig) Build(context operator.BuildContext) ([]operator.Operator, 
 		return nil, fmt.Errorf("`max_concurrent_files` must be positive")
 	}
 
-	encoding, err := lookupEncoding(c.Encoding)
+	decoder, err := c.DecoderConfig.Build()
 	if err != nil {
 		return nil, err
 	}
 
-	splitFunc, err := c.getSplitFunc(encoding)
+	splitFunc, err := c.getSplitFunc(decoder.Encoding)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +127,7 @@ func (c InputConfig) Build(context operator.BuildContext) ([]operator.Operator, 
 
 	op := &InputOperator{
 		InputOperator:      inputOperator,
+		decoder:            decoder,
 		Include:            c.Include,
 		Exclude:            c.Exclude,
 		SplitFunc:          splitFunc,
@@ -139,7 +138,6 @@ func (c InputConfig) Build(context operator.BuildContext) ([]operator.Operator, 
 		fingerprintBytes:   1000,
 		startAtBeginning:   startAtBeginning,
 		queuedMatches:      make([]string, 0),
-		encoding:           encoding,
 		firstCheck:         true,
 		cancel:             func() {},
 		knownFiles:         make([]*Reader, 0, 10),
@@ -149,30 +147,6 @@ func (c InputConfig) Build(context operator.BuildContext) ([]operator.Operator, 
 	}
 
 	return []operator.Operator{op}, nil
-}
-
-var encodingOverrides = map[string]encoding.Encoding{
-	"utf-16":   unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM),
-	"utf16":    unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM),
-	"utf8":     unicode.UTF8,
-	"ascii":    unicode.UTF8,
-	"us-ascii": unicode.UTF8,
-	"nop":      encoding.Nop,
-	"":         encoding.Nop,
-}
-
-func lookupEncoding(enc string) (encoding.Encoding, error) {
-	if encoding, ok := encodingOverrides[strings.ToLower(enc)]; ok {
-		return encoding, nil
-	}
-	encoding, err := ianaindex.IANA.Encoding(enc)
-	if err != nil {
-		return nil, fmt.Errorf("unsupported encoding '%s'", enc)
-	}
-	if encoding == nil {
-		return nil, fmt.Errorf("no charmap defined for encoding '%s'", enc)
-	}
-	return encoding, nil
 }
 
 // getSplitFunc will return the split function associated the configured mode.

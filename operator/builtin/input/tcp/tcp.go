@@ -13,26 +13,33 @@ import (
 )
 
 func init() {
-	operator.Register("tcp_input", func() operator.Builder { return NewTCPInputConfig("") })
+	operator.Register("tcp_input", func() operator.Builder { return NewInputConfig("") })
 }
 
-// NewTCPInputConfig creates a new TCP input config with default values
-func NewTCPInputConfig(operatorID string) *TCPInputConfig {
-	return &TCPInputConfig{
-		InputConfig: helper.NewInputConfig(operatorID, "tcp_input"),
+// NewInputConfig creates a new TCP input config with default values
+func NewInputConfig(operatorID string) *InputConfig {
+	return &InputConfig{
+		InputConfig:   helper.NewInputConfig(operatorID, "tcp_input"),
+		DecoderConfig: helper.NewDecoderConfig("nop"),
 	}
 }
 
-// TCPInputConfig is the configuration of a tcp input operator.
-type TCPInputConfig struct {
-	helper.InputConfig `yaml:",inline"`
+// InputConfig is the configuration of a tcp input operator.
+type InputConfig struct {
+	helper.InputConfig   `yaml:",inline"`
+	helper.DecoderConfig `yaml:",inline,omitempty"`
 
 	ListenAddress string `json:"listen_address,omitempty" yaml:"listen_address,omitempty"`
 }
 
 // Build will build a tcp input operator.
-func (c TCPInputConfig) Build(context operator.BuildContext) ([]operator.Operator, error) {
+func (c InputConfig) Build(context operator.BuildContext) ([]operator.Operator, error) {
 	inputOperator, err := c.InputConfig.Build(context)
+	if err != nil {
+		return nil, err
+	}
+
+	decoder, err := c.DecoderConfig.Build()
 	if err != nil {
 		return nil, err
 	}
@@ -46,16 +53,18 @@ func (c TCPInputConfig) Build(context operator.BuildContext) ([]operator.Operato
 		return nil, fmt.Errorf("failed to resolve listen_address: %s", err)
 	}
 
-	tcpInput := &TCPInput{
+	tcpInput := &InputOperator{
 		InputOperator: inputOperator,
+		decoder:       decoder,
 		address:       address,
 	}
 	return []operator.Operator{tcpInput}, nil
 }
 
-// TCPInput is an operator that listens for log entries over tcp.
-type TCPInput struct {
+// InputOperator is an operator that listens for log entries over tcp.
+type InputOperator struct {
 	helper.InputOperator
+	decoder *helper.Decoder
 	address *net.TCPAddr
 
 	listener *net.TCPListener
@@ -64,7 +73,7 @@ type TCPInput struct {
 }
 
 // Start will start listening for log entries over tcp.
-func (t *TCPInput) Start() error {
+func (t *InputOperator) Start() error {
 	listener, err := net.ListenTCP("tcp", t.address)
 	if err != nil {
 		return fmt.Errorf("failed to listen on interface: %w", err)
@@ -78,7 +87,7 @@ func (t *TCPInput) Start() error {
 }
 
 // goListenn will listen for tcp connections.
-func (t *TCPInput) goListen(ctx context.Context) {
+func (t *InputOperator) goListen(ctx context.Context) {
 	t.wg.Add(1)
 
 	go func() {
@@ -104,7 +113,7 @@ func (t *TCPInput) goListen(ctx context.Context) {
 }
 
 // goHandleClose will wait for the context to finish before closing a connection.
-func (t *TCPInput) goHandleClose(ctx context.Context, conn net.Conn) {
+func (t *InputOperator) goHandleClose(ctx context.Context, conn net.Conn) {
 	t.wg.Add(1)
 
 	go func() {
@@ -118,16 +127,28 @@ func (t *TCPInput) goHandleClose(ctx context.Context, conn net.Conn) {
 }
 
 // goHandleMessages will handles messages from a tcp connection.
-func (t *TCPInput) goHandleMessages(ctx context.Context, conn net.Conn, cancel context.CancelFunc) {
+func (t *InputOperator) goHandleMessages(ctx context.Context, conn net.Conn, cancel context.CancelFunc) {
 	t.wg.Add(1)
 
 	go func() {
 		defer t.wg.Done()
 		defer cancel()
 
+		decoder := t.decoder.Copy()
+
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
-			entry, err := t.NewEntry(scanner.Text())
+
+			msg := scanner.Bytes()
+			t.Debug("Received raw bytes: %s", msg)
+
+			decodedMsg, err := decoder.Decode(msg)
+			if err != nil {
+				t.Errorw("Failed to decode message", zap.Error(err))
+				continue
+			}
+
+			entry, err := t.NewEntry(decodedMsg)
 			if err != nil {
 				t.Errorw("Failed to create entry", zap.Error(err))
 				continue
@@ -141,7 +162,7 @@ func (t *TCPInput) goHandleMessages(ctx context.Context, conn net.Conn, cancel c
 }
 
 // Stop will stop listening for log entries over TCP.
-func (t *TCPInput) Stop() error {
+func (t *InputOperator) Stop() error {
 	t.cancel()
 
 	if err := t.listener.Close(); err != nil {
